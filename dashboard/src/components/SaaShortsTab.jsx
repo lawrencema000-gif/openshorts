@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Globe, Sparkles, Download, Copy, Check, ChevronRight, ChevronLeft, Loader2, AlertCircle, Volume2, User, Film, Terminal, ChevronDown, RefreshCw, Share2, Calendar, Upload } from 'lucide-react';
 import { getApiUrl } from '../config';
 import { apiFetch } from '../lib/api';
+import { useAuth } from '../contexts/AuthContext';
 import { SOCIAL_PLATFORMS, defaultPlatformFlags, flagsFromList } from '../lib/socialPlatforms';
 import StepIndicator from './ui/StepIndicator';
 import SegmentedControl from './ui/SegmentedControl';
@@ -45,7 +46,8 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
   // Managed (hosted plan): Gemini (script) + Upload-Post run server-side via the
   // bearer token — no BYOK Gemini key needed. fal.ai + ElevenLabs stay BYOK.
   const geminiHeader = geminiApiKey ? { 'X-Gemini-Key': geminiApiKey } : {};
-  const needsGeminiKey = !geminiApiKey && !managed;
+  const { serverGeminiKey } = useAuth();  // a key in the server's .env serves requests without one
+  const needsGeminiKey = !geminiApiKey && !managed && !serverGeminiKey;
   // Wizard state
   const [step, setStep] = useState(() => {
     const cache = loadCache();

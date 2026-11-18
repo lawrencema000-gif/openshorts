@@ -2155,6 +2155,13 @@ def transcribe_video(video_path, slot_timeout=None):
 
     return transcript
 
+# Set once Gemini's quota is gone for this job (main.py runs once per job):
+# "daily" (the day's quota is spent) or "none" (the model has no quota on the
+# key). With LLM_QUOTA_FALLBACK set, the job's later calls go straight to
+# Claude instead of asking Gemini again.
+_GEMINI_QUOTA = {"spent": None}
+
+
 def _run_gemini_stage(client, model_name, prompt, schema):
     """One schema-enforced model call with transient-error backoff.
     Returns (parsed_dict, cost_analysis).
@@ -2163,8 +2170,18 @@ def _run_gemini_stage(client, model_name, prompt, schema):
     the call goes there instead of Gemini and ``client`` is unused; the
     retry policy is shared because a local server has the same failure
     shapes (connection refused while the model loads, a truncated body,
-    a 5xx from a busy vLLM)."""
+    a 5xx from a busy vLLM).
+
+    With Claude as Gemini's quota overflow (``llm_backend.quota_fallback()``)
+    a 429 RESOURCE_EXHAUSTED is the one error that can reach Claude: a spent
+    daily quota or a zero quota switches at once, for this call and the rest
+    of the job; a per-minute limit is waited out on Gemini for as long as
+    Google asks, and only one that is still there on the last attempt sends
+    this call to Claude. Every other error keeps the handling below."""
     use_local = llm_backend.active()
+    overflow = not use_local and llm_backend.quota_fallback() is not None
+    if overflow and _GEMINI_QUOTA["spent"]:
+        return llm_backend.generate_json_quota_fallback(prompt, schema)
     config = None if use_local else genai_types.GenerateContentConfig(
         response_mime_type="application/json",
         response_schema=schema,
@@ -2194,6 +2211,35 @@ def _run_gemini_stage(client, model_name, prompt, schema):
             raise  # deterministic policy block — never retry
         except Exception as e:
             msg = str(e)
+            quota = llm_backend.gemini_quota_kind(e) if overflow else None
+            if quota:
+                claude = llm_backend.claude_model()
+                hint = llm_backend.gemini_retry_after(e)
+                # Google's RetryInfo says when the quota is back: under a minute
+                # for a per-minute limit, the hours to midnight Pacific for a
+                # spent day (71928 s in a real reply). Waiting minutes or more
+                # is the same as being out, whatever the quota's name says.
+                if quota in ("daily", "none") or (hint or 0) > 120:
+                    _GEMINI_QUOTA["spent"] = quota
+                    if quota == "none":
+                        why = f"This Gemini key has no quota for {model_name}"
+                    else:
+                        why = f"Gemini's quota for {model_name} is used up"
+                        if hint:
+                            why += f" (Google says it is back in ~{max(1, round(hint / 3600))}h)"
+                    print(f"💳 {why}; Claude ({claude}) finds the rest of this job's clips.")
+                    return llm_backend.generate_json_quota_fallback(prompt, schema)
+                if attempt == max_attempts:
+                    print(f"💳 Gemini is still rate-limited after {max_attempts} tries; "
+                          f"Claude ({claude}) answers this call.")
+                    return llm_backend.generate_json_quota_fallback(prompt, schema)
+                wait = 5 * (2 ** (attempt - 1))
+                if hint:
+                    wait = min(65, max(wait, int(hint) + 2))
+                print(f"⏳ Gemini rate limit hit (attempt {attempt}/{max_attempts}); "
+                      f"waiting {wait}s for it to clear.")
+                time.sleep(wait)
+                continue
             transient = any(tok in msg for tok in (
                 '503', 'UNAVAILABLE', '429', 'RESOURCE_EXHAUSTED',
                 '500', 'INTERNAL', 'overloaded', 'Deadline',
@@ -2239,6 +2285,24 @@ def _run_stage_split(client, model_name, items, build_prompt, schema, key, costs
                 + _run_stage_split(client, model_name, items[mid:], build_prompt, schema, key, costs, label))
 
 
+def _cost_summary(costs, model_name):
+    """The job's cost_analysis. ``model`` names every model that answered, in
+    order of first use ("gemini-3.1-flash-lite + claude-opus-5-5" when Claude
+    covered a spent Gemini quota) and ``by_model`` splits the total, so the
+    dashboard can show who the money went to."""
+    by_model = {}
+    for c in costs:
+        name = c.get("model") or model_name
+        by_model[name] = by_model.get(name, 0.0) + float(c.get("total_cost") or 0)
+    return {
+        "input_tokens": sum(c.get("input_tokens", 0) for c in costs),
+        "output_tokens": sum(c.get("output_tokens", 0) for c in costs),
+        "total_cost": sum(c.get("total_cost", 0) for c in costs),
+        "model": " + ".join(by_model) or model_name,
+        "by_model": by_model,
+    }
+
+
 def score_batch_size():
     """Transcript windows per scoring call: ``LLM_SCORE_BATCH`` if set, else
     8 for Gemini and Claude (1M context) and 3 for an OpenAI-compatible server."""
@@ -2270,7 +2334,9 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None):
         model_name = llm_backend.model_name()
         print(f"\U0001f916  Analyzing with {llm_backend.label()} (2-pass: score → detail)...")
     else:
-        print("\U0001f916  Analyzing with Gemini (2-pass: score → detail)...")
+        overflow = (f"; Claude ({llm_backend.claude_model()}) steps in if its quota runs out"
+                    if llm_backend.quota_fallback() else "")
+        print(f"\U0001f916  Analyzing with Gemini (2-pass: score → detail){overflow}...")
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
             print("❌ Error: GEMINI_API_KEY not found in environment variables "
@@ -2418,13 +2484,11 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None):
         # Aggregate cost across both passes.
         cost_analysis = None
         if costs:
-            cost_analysis = {
-                "input_tokens": sum(c.get("input_tokens", 0) for c in costs),
-                "output_tokens": sum(c.get("output_tokens", 0) for c in costs),
-                "total_cost": sum(c.get("total_cost", 0) for c in costs),
-                "model": model_name,
-            }
-            print(f"\U0001f4b0 Total cost ({model_name}, 2-pass, {len(costs)} calls): ${cost_analysis['total_cost']:.6f}")
+            cost_analysis = _cost_summary(costs, model_name)
+            print(f"\U0001f4b0 Total cost ({cost_analysis['model']}, 2-pass, {len(costs)} calls): ${cost_analysis['total_cost']:.6f}")
+            if len(cost_analysis["by_model"]) > 1:
+                for name, amount in cost_analysis["by_model"].items():
+                    print(f"   {name}: ${amount:.6f}")
 
         if not shorts:
             print("⚠️ 2-pass returned no clips.")

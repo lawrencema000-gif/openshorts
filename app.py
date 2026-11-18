@@ -5401,6 +5401,10 @@ async def get_config():
         # Self-host only: tells the dashboard the Gemini key is optional
         # because the moment picker runs on an OpenAI-compatible server.
         "localLlm": None if BILLING_ENABLED else llm_backend.describe(),
+        # Self-host only: a GEMINI_API_KEY in the server's .env serves every
+        # request that sends no X-Gemini-Key (resolve_gemini), so the
+        # dashboard must not demand one from the browser.
+        "serverGeminiKey": (not BILLING_ENABLED) and bool((os.environ.get("GEMINI_API_KEY") or "").strip()),
     }
 
 async def _probe_youtube_quality(url: str) -> dict:

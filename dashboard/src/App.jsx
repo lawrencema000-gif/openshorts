@@ -286,16 +286,24 @@ const pollJob = async (jobId) => {
 
 // Who picked the moments, from the job's cost_analysis.model: the badge used to
 // say GEMINI even when a self-hosted install ran them on Claude or a local LLM.
+// A job where Claude covered a spent Gemini quota names both: "a + b".
 const costProvider = (model) => {
-  const m = String(model || '').toLowerCase();
-  if (!m || m.startsWith('gemini')) return 'GEMINI';
-  if (m.startsWith('claude')) return 'CLAUDE';
-  return 'LOCAL LLM';
+  const one = (m) => (!m || m.startsWith('gemini') ? 'GEMINI' : m.startsWith('claude') ? 'CLAUDE' : 'LOCAL LLM');
+  const names = String(model || '').toLowerCase().split('+').map((m) => m.trim());
+  return [...new Set(names.map(one))].join(' + ');
+};
+
+// Badge tooltip: the per-model split when more than one model answered.
+const costTitle = (ca) => {
+  const split = ca.by_model && Object.keys(ca.by_model).length > 1
+    ? Object.entries(ca.by_model).map(([m, c]) => `${m} $${Number(c).toFixed(5)}`).join(' + ')
+    : (ca.model || 'gemini');
+  return `${split} | Input: ${ca.input_tokens} | Output: ${ca.output_tokens}`;
 };
 
 function App() {
   // Cloud auth/billing session (inert when billing is disabled).
-  const { billingEnabled, isManaged, isSignedIn, me, plan, refreshMe, jobRetentionSeconds, localLlm, loading: authLoading } = useAuth();
+  const { billingEnabled, isManaged, isSignedIn, me, plan, refreshMe, jobRetentionSeconds, localLlm, serverGeminiKey, loading: authLoading } = useAuth();
   const [showLogin, setShowLogin] = useState(false);
   const [showTopUp, setShowTopUp] = useState(false);
   // Free plan: "want the watermark off?" once per job, when the clips land.
@@ -947,7 +955,10 @@ function App() {
   // `keysMissing` now means "self-host BYOK keys missing" — it never fires on hosted.
   // A self-hosted server running the moment picker on a local LLM
   // (LLM_BASE_URL) does not need a Gemini key for the core pipeline.
-  const geminiOk = !!apiKey || !!localLlm;
+  // A Gemini key in the server's .env counts too: requests without the header
+  // fall back to it (app.resolve_gemini).
+  const geminiSet = !!apiKey || serverGeminiKey;
+  const geminiOk = geminiSet || !!localLlm;
   // Only what CLIPPING needs blocks a job. Upload-Post is for publishing, and
   // every publishing surface already checks its key on its own (ResultCard and
   // ScheduleWeekModal `canPost`, SaaShortsTab, ThumbnailStudio), so a missing
@@ -1810,7 +1821,7 @@ function App() {
                 </div>
               ) : (
                 <>
-              <KeyInput onKeySet={setApiKey} savedKey={apiKey} />
+              <KeyInput onKeySet={setApiKey} savedKey={apiKey} serverKey={serverGeminiKey} />
 
               <div className="card p-4 sm:p-6 mt-8">
                 <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
@@ -2379,7 +2390,7 @@ function App() {
                       </span>
                     )}
                     {results?.cost_analysis && !isManaged && (
-                      <span className="readout bg-paper3 px-2.5 py-1 rounded-full" title={`${results.cost_analysis.model || 'gemini'} | Input: ${results.cost_analysis.input_tokens} | Output: ${results.cost_analysis.output_tokens}`}>
+                      <span className="readout bg-paper3 px-2.5 py-1 rounded-full" title={costTitle(results.cost_analysis)}>
                         {costProvider(results.cost_analysis.model)} · ${results.cost_analysis.total_cost.toFixed(5)}
                       </span>
                     )}
@@ -2621,12 +2632,12 @@ function App() {
           </p>
 
           {/* Gemini block */}
-          <div className={`rounded-input p-4 space-y-2 border ${!apiKey ? 'border-rule2' : 'border-rule opacity-70'}`}>
+          <div className={`rounded-input p-4 space-y-2 border ${!geminiSet ? 'border-rule2' : 'border-rule opacity-70'}`}>
             <p className="text-xs font-medium text-ink flex items-center gap-2">
-              {apiKey ? <Check size={12} className="text-ok" /> : <AlertTriangle size={12} className="text-warn" />}
-              Gemini API Key {apiKey && <span className="text-ok">— set</span>}
+              {geminiSet ? <Check size={12} className="text-ok" /> : <AlertTriangle size={12} className="text-warn" />}
+              Gemini API Key {apiKey ? <span className="text-ok">— set</span> : serverGeminiKey && <span className="text-ok">— set on the server</span>}
             </p>
-            {!apiKey && (
+            {!geminiSet && (
               <>
                 <ol className="text-xs text-muted space-y-1 list-decimal list-inside">
                   <li>Go to <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-brass underline">aistudio.google.com/app/apikey</a></li>

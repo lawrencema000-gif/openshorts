@@ -452,6 +452,9 @@ lives in [`examples/n8n/`](examples/n8n/).
 | `LLM_MODEL` | Model name on that server (default `llama3.1:8b`) |
 | `LLM_API_KEY` | Bearer token for that server, if it checks one |
 | `LLM_SCORE_BATCH` | Transcript windows per scoring call (default 3 local, 8 Gemini) |
+| `LLM_PROVIDER` | `anthropic` runs the moment picker on Claude (needs `ANTHROPIC_API_KEY`); `gemini` keeps it on Gemini |
+| `LLM_QUOTA_FALLBACK` | `anthropic`: Gemini stays the picker and Claude answers only once Gemini's quota runs out (per-minute limits are waited out first) |
+| `GEMINI_API_KEY` | Server-side Gemini key, used by any request that sends no `X-Gemini-Key`; the dashboard then stops asking for one |
 
 **Client-side (encrypted in localStorage):**
 | Key | Description |

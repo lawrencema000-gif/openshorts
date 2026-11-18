@@ -224,6 +224,9 @@ export function AuthProvider({ children }) {
   const value = {
     billingEnabled: config.billingEnabled,
     localLlm: config.localLlm || null,
+    // Self-host: the server's .env holds a Gemini key that serves every request
+    // sending none, so the browser does not need its own.
+    serverGeminiKey: !!config.serverGeminiKey,
     googleAuthEnabled: config.googleAuthEnabled,
     jobRetentionSeconds: config.jobRetentionSeconds || null,
     loading,

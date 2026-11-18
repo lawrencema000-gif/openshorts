@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { Upload, Image, Loader2, Send, Check, Download, ArrowRight, ArrowLeft, Sparkles, Video, Type, X, Plus, MessageSquare, FileText, Youtube, AlertCircle, Settings } from 'lucide-react';
 import { getApiUrl } from '../config';
 import { apiFetch, QuotaError, openQuotaWall } from '../lib/api';
+import { useAuth } from '../contexts/AuthContext';
 import StepIndicator from './ui/StepIndicator';
 import SegmentedControl from './ui/SegmentedControl';
 
@@ -83,7 +84,8 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
   // Managed (hosted plan): Gemini runs server-side via the bearer token, no BYOK key.
   // Only send X-Gemini-Key for self-host BYOK. apiFetch attaches the bearer token.
   const keyHeader = geminiApiKey ? { 'X-Gemini-Key': geminiApiKey } : {};
-  const needsKey = !geminiApiKey && !managed;
+  const { serverGeminiKey } = useAuth();  // a key in the server's .env serves requests without one
+  const needsKey = !geminiApiKey && !managed && !serverGeminiKey;
   // Step management
   const [step, setStep] = useState(0);
   const [mode, setMode] = useState(null); // 'video' or 'manual'

@@ -79,7 +79,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     const [showDescModal, setShowDescModal] = useState(false);
     const [showSubtitleModal, setShowSubtitleModal] = useState(false);
     const [showWatermarkModal, setShowWatermarkModal] = useState(false);
-    const { plan } = useAuth();
+    const { plan, serverGeminiKey } = useAuth();
     const videoRef = React.useRef(null);
     // Pristine base clip (no burned subtitles/hook), stable regardless of how
     // clip.video_url mutates after server edits. Used as the compositing base
@@ -354,8 +354,9 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
             const apiKey = geminiApiKey || localStorage.getItem('gemini_key');
 
             // Managed (paid) users get the Gemini key resolved server-side;
-            // only BYOK/self-host needs a local key.
-            if (!apiKey && !isManaged) {
+            // only BYOK/self-host needs a local key, unless the server's .env
+            // holds one.
+            if (!apiKey && !isManaged && !serverGeminiKey) {
                 throw new Error("Gemini API Key is missing. Please set it in Settings.");
             }
             const geminiHeaders = apiKey ? { 'X-Gemini-Key': apiKey } : {};

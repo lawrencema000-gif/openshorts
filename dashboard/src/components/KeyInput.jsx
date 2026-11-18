@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Key, Eye, EyeOff, Check } from 'lucide-react';
 
-export default function KeyInput({ onKeySet, savedKey }) {
+export default function KeyInput({ onKeySet, savedKey, serverKey = false }) {
     const [key, setKey] = useState(savedKey || '');
     const [isVisible, setIsVisible] = useState(false);
     const [isSaved, setIsSaved] = useState(!!savedKey);
@@ -54,6 +54,12 @@ export default function KeyInput({ onKeySet, savedKey }) {
                 </button>
             </div>
             <p className="mt-3 text-xs text-muted">
+                {serverKey && !savedKey && (
+                    <>
+                        <span className="text-ok">A Gemini key is set on the server, so clips already work.</span> Paste one here only to use a different key from this browser.
+                        <br />
+                    </>
+                )}
                 Your key is stored locally in your browser for convenience.
                 <br />
                 <a

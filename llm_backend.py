@@ -18,6 +18,15 @@ takes the same pydantic schema and returns a validated object. Knobs:
 (default 16000) and ``LLM_FALLBACKS`` (default ``default``: server-side
 refusal fallback on the models that have one; ``none`` disables it).
 
+``LLM_QUOTA_FALLBACK=anthropic`` keeps Gemini as the provider and makes
+Claude its overflow: only a call Gemini refuses for QUOTA (HTTP 429
+RESOURCE_EXHAUSTED) goes to Claude. ``main._run_gemini_stage`` waits out a
+per-minute limit on Gemini first, for as long as Google says; a spent daily
+quota, or a model with no quota on the key (limit 0), sends that call and the
+rest of the job's calls to Claude at once. Outages, policy blocks and bad
+responses keep their Gemini handling, so they never spend Claude money. The
+Claude knobs above (``LLM_MODEL``, ``LLM_EFFORT``, ...) apply to the overflow.
+
 What stays on Gemini, because it needs a model that can look at frames or a
 video file: the layout picker (``layout_picker.py``), the on-screen content
 detector (``screencast_layout.py``) and the silent-video path
@@ -37,6 +46,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Optional, Tuple, Type
 
 import httpx
@@ -92,10 +102,25 @@ def _anthropic_key() -> str:
 
 
 def model_name() -> str:
-    explicit = (os.environ.get("LLM_MODEL") or "").strip()
-    if explicit:
-        return explicit
-    return DEFAULT_CLAUDE_MODEL if provider() == "anthropic" else DEFAULT_MODEL
+    if provider() == "anthropic":
+        return claude_model()
+    return (os.environ.get("LLM_MODEL") or "").strip() or DEFAULT_MODEL
+
+
+def claude_model() -> str:
+    """The Claude model, whether Claude is the provider or Gemini's overflow."""
+    return (os.environ.get("LLM_MODEL") or "").strip() or DEFAULT_CLAUDE_MODEL
+
+
+def quota_fallback() -> Optional[str]:
+    """``"anthropic"`` when Claude takes the calls Gemini refuses for quota:
+    ``LLM_QUOTA_FALLBACK=anthropic`` (or ``claude``), Gemini as the provider,
+    and ``ANTHROPIC_API_KEY`` set. Otherwise ``None`` and Gemini's quota
+    errors are handled as before."""
+    wanted = (os.environ.get("LLM_QUOTA_FALLBACK") or "").strip().lower()
+    if wanted in ANTHROPIC_PROVIDERS and provider() == "gemini" and _anthropic_key():
+        return "anthropic"
+    return None
 
 
 def active() -> bool:
@@ -358,3 +383,64 @@ def _claude_cost(response, model: str) -> dict:
         "price_estimated": price is None or fallback_ran,
         "local": False,
     }
+
+
+# --- Claude as the overflow for Gemini's quota (LLM_QUOTA_FALLBACK) ----------
+
+def generate_json_quota_fallback(prompt: str, schema: Type[BaseModel],
+                                 ) -> Tuple[dict, Optional[dict]]:
+    """``generate_json`` on Claude, for a call Gemini refused for quota."""
+    return _generate_json_claude(prompt, schema, claude_model())
+
+
+# The Gemini API's 429 carries a google.rpc.QuotaFailure naming each quota it
+# hit (quotaId "GenerateRequestsPerDayPerProjectPerModel-FreeTier", ...) and its
+# limit (quotaValue), plus a RetryInfo delay. The SDK keeps that JSON on the
+# error's ``details``; str(error) holds the same text, so an error re-raised as
+# a plain message still classifies. Both quote styles are matched.
+_QUOTA_ID = re.compile(r"""quotaId['"]?\s*:\s*['"]([^'"]+)['"]""")
+_QUOTA_VALUE = re.compile(r"""quotaValue['"]?\s*:\s*['"]?(\d+)""")
+_QUOTA_LIMIT = re.compile(r"\blimit:\s*(\d+)")
+_RETRY_DELAY = re.compile(r"""retryDelay['"]?\s*:\s*['"](\d+(?:\.\d+)?)s""")
+_RETRY_IN = re.compile(r"retry in (\d+(?:\.\d+)?)\s*s", re.IGNORECASE)
+
+
+def _error_text(error) -> str:
+    text = str(error)
+    details = getattr(error, "details", None)
+    if details is not None and not isinstance(details, str):
+        try:
+            text += " " + json.dumps(details, default=str)
+        except (TypeError, ValueError):
+            pass
+    return text
+
+
+def gemini_quota_kind(error) -> Optional[str]:
+    """How a failed Gemini call ran out of quota, or ``None`` when it did not.
+
+    ``"none"``: the model has no quota of that kind on this key (limit 0), so
+    no wait helps. ``"daily"``: a per-day quota is spent; free-tier quotas
+    come back at midnight Pacific time. ``"minute"``: a per-minute request or
+    token limit, clear within a minute. ``"unknown"``: a 429 that does not say
+    which quota it hit."""
+    text = _error_text(error)
+    if getattr(error, "code", None) != 429 and "RESOURCE_EXHAUSTED" not in text:
+        return None
+    limits = _QUOTA_VALUE.findall(text) + _QUOTA_LIMIT.findall(text)
+    if "0" in limits:
+        return "none"
+    quota_ids = _QUOTA_ID.findall(text)
+    if any("PerDay" in q for q in quota_ids):
+        return "daily"
+    if any("PerMinute" in q for q in quota_ids):
+        return "minute"
+    return "unknown"
+
+
+def gemini_retry_after(error) -> Optional[float]:
+    """Seconds Google asks a caller to wait (RetryInfo, else the message's
+    "Please retry in Ns"), or ``None`` when it gives no delay."""
+    text = _error_text(error)
+    match = _RETRY_DELAY.search(text) or _RETRY_IN.search(text)
+    return float(match.group(1)) if match else None
