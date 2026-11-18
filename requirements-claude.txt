@@ -1,0 +1,8 @@
+# Claude for the moment picker (llm_backend.py, LLM_PROVIDER=anthropic).
+# Installed in its own Dockerfile layer with --no-deps; these are exactly the
+# packages anthropic needs beyond requirements-*.lock, resolved against it
+# (pip install --dry-run --report inside the built image).
+anthropic==2.5.0
+docstring_parser==0.18.0
+jiter==0.19.0
+opentelemetry-api==1.45.2

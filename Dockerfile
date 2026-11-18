@@ -126,6 +126,13 @@ ENV NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
 # Latest yt-dlp (nightly — it updates frequently) plus its helper plugin.
 RUN pip install --upgrade --pre --no-cache-dir "yt-dlp[default]" bgutil-ytdlp-pot-provider
 
+# Claude for the moment picker (llm_backend.py, LLM_PROVIDER=anthropic): the
+# official anthropic SDK and the few packages it needs beyond the lock. Its own
+# small layer, so adding it leaves the multi-GB torch/CUDA layer above cached;
+# --no-deps + pip check keep everything else exactly as the lock pinned it.
+COPY requirements-claude.txt ./
+RUN pip install --no-cache-dir --no-deps -r requirements-claude.txt && pip check
+
 # Copy application code
 COPY . .
 

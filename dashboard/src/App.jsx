@@ -284,6 +284,15 @@ const pollJob = async (jobId) => {
   return res.json();
 };
 
+// Who picked the moments, from the job's cost_analysis.model: the badge used to
+// say GEMINI even when a self-hosted install ran them on Claude or a local LLM.
+const costProvider = (model) => {
+  const m = String(model || '').toLowerCase();
+  if (!m || m.startsWith('gemini')) return 'GEMINI';
+  if (m.startsWith('claude')) return 'CLAUDE';
+  return 'LOCAL LLM';
+};
+
 function App() {
   // Cloud auth/billing session (inert when billing is disabled).
   const { billingEnabled, isManaged, isSignedIn, me, plan, refreshMe, jobRetentionSeconds, localLlm, loading: authLoading } = useAuth();
@@ -939,7 +948,11 @@ function App() {
   // A self-hosted server running the moment picker on a local LLM
   // (LLM_BASE_URL) does not need a Gemini key for the core pipeline.
   const geminiOk = !!apiKey || !!localLlm;
-  const keysMissing = !billingEnabled && (!geminiOk || !uploadPostKey);
+  // Only what CLIPPING needs blocks a job. Upload-Post is for publishing, and
+  // every publishing surface already checks its key on its own (ResultCard and
+  // ScheduleWeekModal `canPost`, SaaShortsTab, ThumbnailStudio), so a missing
+  // Upload-Post key no longer stops a self-hosted user from making clips.
+  const keysMissing = !billingEnabled && !geminiOk;
   const needsPlan = billingEnabled && !isManaged;   // hosted, signed-out or no active plan/trial
 
   // Fresh sign-up: Clip Generator tutorial (AuthContext set os_show_clip_tutorial
@@ -1660,13 +1673,7 @@ function App() {
                 title="Configure API keys or choose a plan"
               >
                 <AlertTriangle size={12} />
-                <span className="hidden md:inline">
-                  {!geminiOk && !uploadPostKey
-                    ? 'Gemini & Upload-Post keys missing'
-                    : !geminiOk
-                      ? 'Gemini API Key Missing'
-                      : 'Upload-Post API Key Missing'}
-                </span>
+                <span className="hidden md:inline">Gemini API Key Missing</span>
                 <span className="md:hidden">keys missing</span>
               </button>
             )}
@@ -1681,11 +1688,7 @@ function App() {
               <div className="min-w-0">
                 <span className="font-medium text-ink">Required API keys missing.</span>{' '}
                 <span className="text-muted">
-                  {!geminiOk && !uploadPostKey
-                    ? 'Set your Gemini and Upload-Post API keys to use OpenShorts.'
-                    : !geminiOk
-                      ? 'Set your Gemini API key to use OpenShorts.'
-                      : 'Set your Upload-Post API key to use OpenShorts.'}
+                  Set your Gemini API key to make clips. An Upload-Post key is only needed to publish.
                 </span>
               </div>
             </div>
@@ -2376,8 +2379,8 @@ function App() {
                       </span>
                     )}
                     {results?.cost_analysis && !isManaged && (
-                      <span className="readout bg-paper3 px-2.5 py-1 rounded-full" title={`Input: ${results.cost_analysis.input_tokens} | Output: ${results.cost_analysis.output_tokens}`}>
-                        GEMINI · ${results.cost_analysis.total_cost.toFixed(5)}
+                      <span className="readout bg-paper3 px-2.5 py-1 rounded-full" title={`${results.cost_analysis.model || 'gemini'} | Input: ${results.cost_analysis.input_tokens} | Output: ${results.cost_analysis.output_tokens}`}>
+                        {costProvider(results.cost_analysis.model)} · ${results.cost_analysis.total_cost.toFixed(5)}
                       </span>
                     )}
                   </h2>
@@ -2594,11 +2597,7 @@ function App() {
         isOpen={showKeyModal}
         onClose={() => setShowKeyModal(false)}
         eyebrow="SETUP"
-        title={!geminiOk && !uploadPostKey
-          ? 'Required API Keys Missing'
-          : !geminiOk
-            ? 'Gemini API Key Required'
-            : 'Upload-Post API Key Required'}
+        title="Gemini API Key Required"
         footer={
           <div className="flex gap-3">
             <button
@@ -2618,7 +2617,7 @@ function App() {
       >
         <div className="space-y-4">
           <p className="text-sm text-muted">
-            OpenShorts needs both a <strong className="text-ink2">Gemini</strong> API key and an <strong className="text-ink2">Upload-Post</strong> API key. Both have free tiers.
+            OpenShorts needs a <strong className="text-ink2">Gemini</strong> API key to find clips (free tier). An <strong className="text-ink2">Upload-Post</strong> API key is optional: add it to publish clips to your socials.
           </p>
 
           {/* Gemini block */}
@@ -2653,7 +2652,7 @@ function App() {
           <div className={`rounded-input p-4 space-y-2 border ${!uploadPostKey ? 'border-rule2' : 'border-rule opacity-70'}`}>
             <p className="text-xs font-medium text-ink flex items-center gap-2">
               {uploadPostKey ? <Check size={12} className="text-ok" /> : <AlertTriangle size={12} className="text-warn" />}
-              Upload-Post API Key {uploadPostKey && <span className="text-ok">— set</span>}
+              Upload-Post API Key {uploadPostKey ? <span className="text-ok">— set</span> : <span className="text-muted">(optional, for publishing)</span>}
             </p>
             {!uploadPostKey && (
               <>

@@ -2241,14 +2241,14 @@ def _run_stage_split(client, model_name, items, build_prompt, schema, key, costs
 
 def score_batch_size():
     """Transcript windows per scoring call: ``LLM_SCORE_BATCH`` if set, else
-    8 for Gemini (1M context) and 3 for an OpenAI-compatible server."""
+    8 for Gemini and Claude (1M context) and 3 for an OpenAI-compatible server."""
     raw = os.environ.get("LLM_SCORE_BATCH", "").strip()
     if raw:
         try:
             return max(1, int(raw))
         except ValueError:
             pass
-    return 3 if llm_backend.active() else 8
+    return 3 if llm_backend.small_context() else 8
 
 
 def get_viral_clips(transcript_result, video_duration, viewer_clips=None):
@@ -2268,7 +2268,7 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None):
         # Self-hosted text model: no Google key needed for this stage.
         client = None
         model_name = llm_backend.model_name()
-        print(f"\U0001f916  Analyzing with local LLM at {llm_backend.base_url()} (2-pass: score → detail)...")
+        print(f"\U0001f916  Analyzing with {llm_backend.label()} (2-pass: score → detail)...")
     else:
         print("\U0001f916  Analyzing with Gemini (2-pass: score → detail)...")
         api_key = os.getenv("GEMINI_API_KEY")
